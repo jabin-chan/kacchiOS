@@ -2,6 +2,7 @@
 #include "types.h"
 #include "serial.h"
 #include "string.h"
+#include "scheduler.h"
 
 #define MAX_INPUT 128
 
@@ -11,6 +12,7 @@ void kmain(void) {
     
     /* Initialize hardware */
     serial_init();
+    scheduler_init();
     
     /* Print welcome message */
     serial_puts("\n");
