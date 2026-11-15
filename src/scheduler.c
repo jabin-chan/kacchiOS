@@ -38,6 +38,7 @@ static int front = 0;
 static int rear = 0;
 static int count = 0;
 static PCB* idle_process = NULL;
+static void sort_queue(void);
 
 static int enqueue(PCB* p)
 {
@@ -107,6 +108,7 @@ void scheduler_init(void)
 
 void schedule(void)
 {
+	sort_queue();
 	PCB* old_process = get_current_process();
 	PCB* next_process = pick_next();
 	
@@ -209,3 +211,191 @@ int scheduler_add(PCB* p)
 	return 1;
 }
 
+#ifndef MAX_PRIORITY
+#define MAX_PRIORITY 9
+#endif
+#define DEFAULT_QUANTUM 3      //ticks 
+#define AGING_THRESHOLD 10     // ticks waiting before priority +1 
+
+static int time_quantum = DEFAULT_QUANTUM;
+static int ticks_left = DEFAULT_QUANTUM;
+static int aging_enabled = 1;
+static int preemptive = 0;
+
+//stable insertion sort: highest priority first, ties keep FIFO order 
+static void sort_queue(void)
+{
+	for (int i = 1; i < count; i++)
+	{
+		PCB* key = ready_queue[(front + i) % MAX_READY_QUEUE];
+		int j = i - 1;
+
+		while (j >= 0 && ready_queue[(front + j) % MAX_READY_QUEUE]->priority < key->priority)
+		{
+			ready_queue[(front + j + 1) % MAX_READY_QUEUE] = ready_queue[(front + j) % MAX_READY_QUEUE];
+			j--;
+		}
+		ready_queue[(front + j + 1) % MAX_READY_QUEUE] = key;
+	}
+}
+
+//highest priority among valid waiting processes, -1 if none 
+static int top_waiting_priority(void)
+{
+	int best = -1;
+
+	for (int i = 0; i < count; i++)
+	{
+		PCB* p = ready_queue[(front + i) % MAX_READY_QUEUE];
+
+		if (p != NULL && p->state == READY && p->stack_ptr != 0 && p->priority > best)
+		{
+			best = p->priority;
+		}
+	}
+	return best;
+}
+
+static void age_waiting_processes(void)
+{
+	if (!aging_enabled)
+	{
+		return;
+	}
+
+	for (int i = 0; i < count; i++)
+	{
+		PCB* p = ready_queue[(front + i) % MAX_READY_QUEUE];
+
+		if (p == NULL || p->state != READY)
+		{
+			continue;
+		}
+
+		p->wait_ticks++;
+
+		if (p->wait_ticks >= AGING_THRESHOLD)
+		{
+			p->wait_ticks = 0;
+
+			if (p->priority < MAX_PRIORITY)
+			{
+				p->priority++;
+				serial_puts("Scheduler: aging pid ");
+				print_int(p->pid);
+				serial_puts(" -> priority ");
+				print_int(p->priority);
+				serial_puts("\n");
+			}
+		}
+	}
+}
+
+// running process leaves the CPU: drop any aging boost 
+static void reset_priority(PCB* p)
+{
+	if (p != NULL && p != idle_process)
+	{
+		p->priority = p->base_priority;
+		p->wait_ticks = 0;
+	}
+}
+//called once per timer tick, from the timer ISR (interrupts already off) 
+void scheduler_tick(void)
+{
+	PCB* cur = get_current_process();
+
+	age_waiting_processes();
+
+	if (ticks_left > 0)
+	{
+		ticks_left--;
+	}
+	if (ticks_left > 0)
+	{
+		return;
+	}
+
+	//quantum used up 
+	ticks_left = time_quantum;
+
+	// keep running if strictly higher priority than everyone waiting.
+	if (cur != NULL && cur != idle_process && cur->state == CURRENT &&
+	    cur->priority > top_waiting_priority())
+	{
+		return;
+	}
+
+	reset_priority(cur);
+	sort_queue();
+	schedule();
+}
+
+void scheduler_yield(void)
+{
+	unsigned int flags = irq_save();
+
+	reset_priority(get_current_process());
+	ticks_left = time_quantum;
+	sort_queue();
+	schedule();
+
+	irq_restore(flags);   // runs when this context is switched back in 
+}
+
+int scheduler_set_quantum(int ticks)
+{
+	if (ticks < 1)
+	{
+		return 0;
+	}
+
+	unsigned int flags = irq_save();
+	time_quantum = ticks;
+	ticks_left = ticks;
+	irq_restore(flags);
+	return 1;
+}
+
+int scheduler_get_quantum(void)
+{
+	return time_quantum;
+}
+
+void scheduler_enable_preemption(void)
+{
+	preemptive = 1;
+}
+
+int scheduler_preemptive(void)
+{
+	return preemptive;
+}
+
+void scheduler_set_aging(int enabled)
+{
+	aging_enabled = enabled;
+}
+
+int scheduler_set_priority(PCB* p, int priority)
+{
+	if (p == NULL)
+	{
+		return 0;
+	}
+
+	if (priority < 0)
+	{
+		priority = 0;
+	}
+	if (priority > MAX_PRIORITY)
+	{
+		priority = MAX_PRIORITY;
+	}
+
+	unsigned int flags = irq_save();
+	p->base_priority = priority;
+	p->priority = priority;
+	irq_restore(flags);
+	return 1;
+}
