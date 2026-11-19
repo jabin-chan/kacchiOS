@@ -57,7 +57,8 @@ void free_stack(void* ptr);
 /*
  * Heap Management (Variable-size blocks)
  * kmalloc: First-fit dynamic memory allocation (Person 1)
- * kfree:   Heap deallocation and block coalescing (Person 2)
+ *          Enhanced with Explicit Doubly-Linked Free List (Person 2 Bonus)
+ * kfree:   Advanced heap deallocation and bidirectional coalescing (Person 2)
  */
 void* kmalloc(size_t size);
 void  kfree(void* ptr);
@@ -68,5 +69,18 @@ void  kfree(void* ptr);
 size_t memory_get_free_stacks(void);
 size_t memory_get_free_heap(void);
 void   memory_dump_stats(void);
+
+/*
+ * ============================================================================
+ * Person 2: Advanced Memory Management, Leak Auditing & Verification API
+ * ============================================================================
+ */
+size_t memory_get_allocated_bytes(void);
+size_t memory_get_allocated_blocks(void);
+size_t memory_get_free_blocks(void);
+int    memory_check_leaks(void);
+void   memory_verify_no_leaks(void);
+void   process_cleanup_memory(void* stack_base);
+void   memory_run_all_tests(void);
 
 #endif /* MEMORY_H */
